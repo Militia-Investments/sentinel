@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture(autouse=True)
 def setup_env():
     os.environ.setdefault("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
-    os.environ.setdefault("BENZINGA_API_KEY", "test-key")
+    os.environ.setdefault("FINNHUB_API_KEY", "test-key")
     os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
     os.environ.setdefault("SLACK_APP_TOKEN", "xapp-test")
     os.environ.setdefault("SLACK_SIGNING_SECRET", "test-secret")
@@ -64,7 +64,7 @@ def positive_article():
             "Delivery is expected over the next 12 months as NVIDIA ramps production."
         ),
         url="https://example.com/microsoft-nvidia-deal",
-        source="benzinga",
+        source="finnhub",
         tickers=["NVDA", "MSFT"],
         published_at=datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc),
     )
@@ -84,7 +84,7 @@ def negative_article():
             "AI training deployment. Analysts expect this to pressure NVIDIA's pricing and market share."
         ),
         url="https://example.com/amd-beats-nvidia",
-        source="benzinga",
+        source="finnhub",
         tickers=["AMD", "NVDA"],
         published_at=datetime(2024, 3, 5, 14, 0, tzinfo=timezone.utc),
     )

@@ -3,8 +3,8 @@ import os
 # Anthropic
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
-# Benzinga
-BENZINGA_API_KEY = os.environ["BENZINGA_API_KEY"]
+# Finnhub
+FINNHUB_API_KEY = os.environ["FINNHUB_API_KEY"]
 
 # Google Chat — service account JSON stored as a string in env/Secrets Manager
 GOOGLE_CHAT_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_CHAT_SERVICE_ACCOUNT_JSON"]

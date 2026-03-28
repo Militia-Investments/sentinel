@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
-os.environ.setdefault("BENZINGA_API_KEY", "test-key")
+os.environ.setdefault("FINNHUB_API_KEY", "test-key")
 os.environ.setdefault("GOOGLE_CHAT_SERVICE_ACCOUNT_JSON", '{"type":"service_account","project_id":"test","private_key_id":"test","private_key":"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA2a2rwplBQLzgynykEMmYz0+Iq5rIABBTJUBNDl7KBFQNK\n7nBQFQJSEhRHpFW6h5MpRmFBzE2sxkgTt+I4MKJcFX0V2pWuJiQ7NhyBiGiI3Ts\n-----END RSA PRIVATE KEY-----\n","client_email":"test@test.iam.gserviceaccount.com","client_id":"123","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}')
 os.environ.setdefault("GOOGLE_CHAT_SERVICE_ACCOUNT_EMAIL", "test@test.iam.gserviceaccount.com")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT_NUMBER", "123")
@@ -51,7 +51,7 @@ def make_article() -> NewsArticle:
         headline="NVIDIA Reports Record AI Chip Revenue",
         body="NVIDIA announces record quarterly revenue driven by AI datacenter demand.",
         url="https://example.com/nvidia-earnings",
-        source="benzinga",
+        source="finnhub",
         tickers_mentioned=["NVDA"],
         published_at=datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc),
     )

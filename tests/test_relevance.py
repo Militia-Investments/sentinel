@@ -15,7 +15,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def sample_idea():
     os.environ.setdefault("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
-    os.environ.setdefault("BENZINGA_API_KEY", "test-key")
+    os.environ.setdefault("FINNHUB_API_KEY", "test-key")
     os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
     os.environ.setdefault("SLACK_APP_TOKEN", "xapp-test")
     os.environ.setdefault("SLACK_SIGNING_SECRET", "test-secret")
@@ -61,7 +61,7 @@ def relevant_article():
             "for its H100 and H200 AI training GPUs from cloud providers and enterprises."
         ),
         url="https://example.com/nvda-q4-2024-earnings",
-        source="benzinga",
+        source="finnhub",
         tickers=["NVDA"],
         published_at=datetime(2024, 2, 21, 22, 0, tzinfo=timezone.utc),
     )
@@ -79,7 +79,7 @@ def irrelevant_article():
             "The company opened 12 new locations during the period."
         ),
         url="https://example.com/dennys-earnings",
-        source="benzinga",
+        source="finnhub",
         tickers=["DENN"],
         published_at=datetime(2024, 2, 20, 16, 0, tzinfo=timezone.utc),
     )

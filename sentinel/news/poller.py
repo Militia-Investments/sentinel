@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sentinel.models import Idea, NewsArticle
 from sentinel.db import save_article, article_exists
-from sentinel.news.benzinga import fetch_articles_for_tickers
+from sentinel.news.finnhub import fetch_articles_for_tickers
 from sentinel.news.edgar import fetch_filings_for_tickers
 from sentinel.news.gdelt import fetch_articles_for_query
 

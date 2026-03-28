@@ -382,19 +382,19 @@ resource "aws_secretsmanager_secret_version" "anthropic_api_key" {
   secret_string = "{}"  # Fill manually after deployment
 }
 
-resource "aws_secretsmanager_secret" "benzinga_api_key" {
-  name                    = "sentinel/benzinga_api_key"
-  description             = "Benzinga API key for SENTINEL"
+resource "aws_secretsmanager_secret" "finnhub_api_key" {
+  name                    = "sentinel/finnhub_api_key"
+  description             = "Finnhub API key for SENTINEL"
   recovery_window_in_days = 7
 
   tags = {
-    Name        = "sentinel/benzinga_api_key"
+    Name        = "sentinel/finnhub_api_key"
     Environment = var.environment
   }
 }
 
-resource "aws_secretsmanager_secret_version" "benzinga_api_key" {
-  secret_id     = aws_secretsmanager_secret.benzinga_api_key.id
+resource "aws_secretsmanager_secret_version" "finnhub_api_key" {
+  secret_id     = aws_secretsmanager_secret.finnhub_api_key.id
   secret_string = "{}"
 }
 
