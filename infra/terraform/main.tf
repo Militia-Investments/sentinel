@@ -291,6 +291,14 @@ resource "aws_security_group" "sentinel" {
     cidr_blocks = ["0.0.0.0/0"]  # Restrict to your IP in production
   }
 
+  ingress {
+    description = "Google Chat webhook via API Gateway"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]  # Restrict to API Gateway IPs in production
+  }
+
   egress {
     description = "All outbound traffic"
     from_port   = 0
@@ -323,6 +331,22 @@ resource "aws_instance" "sentinel" {
     usermod -a -G docker ec2-user
 
     # Install AWS CLI v2 (already present on AL2023)
+
+    # Load Google Chat secrets from Secrets Manager into /etc/sentinel.env
+    REGION="${var.aws_region}"
+    GOOGLE_CHAT_SA_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id sentinel/google_chat_service_account_json --query SecretString --output text)
+    GOOGLE_CHAT_SA_EMAIL=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id sentinel/google_chat_service_account_email --query SecretString --output text)
+    GOOGLE_CLOUD_PROJECT_NUMBER=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id sentinel/google_cloud_project_number --query SecretString --output text)
+    SENTINEL_ADMIN_SPACE=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id sentinel/sentinel_admin_space --query SecretString --output text)
+
+    cat > /etc/sentinel.env <<ENVEOF
+GOOGLE_CHAT_SERVICE_ACCOUNT_JSON=$GOOGLE_CHAT_SA_JSON
+GOOGLE_CHAT_SERVICE_ACCOUNT_EMAIL=$GOOGLE_CHAT_SA_EMAIL
+GOOGLE_CLOUD_PROJECT_NUMBER=$GOOGLE_CLOUD_PROJECT_NUMBER
+SENTINEL_ADMIN_SPACE=$SENTINEL_ADMIN_SPACE
+ENVEOF
+    chmod 600 /etc/sentinel.env
+
     # Login to ECR and pull the latest image will be done by deploy.sh
     echo "SENTINEL EC2 instance initialized."
   EOF
@@ -374,52 +398,94 @@ resource "aws_secretsmanager_secret_version" "benzinga_api_key" {
   secret_string = "{}"
 }
 
-resource "aws_secretsmanager_secret" "slack_bot_token" {
-  name                    = "sentinel/slack_bot_token"
-  description             = "Slack Bot Token for SENTINEL"
+resource "aws_secretsmanager_secret" "google_chat_service_account_json" {
+  name                    = "sentinel/google_chat_service_account_json"
+  description             = "Google Chat service account JSON for SENTINEL"
   recovery_window_in_days = 7
 
   tags = {
-    Name        = "sentinel/slack_bot_token"
+    Name        = "sentinel/google_chat_service_account_json"
     Environment = var.environment
   }
 }
 
-resource "aws_secretsmanager_secret_version" "slack_bot_token" {
-  secret_id     = aws_secretsmanager_secret.slack_bot_token.id
-  secret_string = "{}"
+resource "aws_secretsmanager_secret_version" "google_chat_service_account_json" {
+  secret_id     = aws_secretsmanager_secret.google_chat_service_account_json.id
+  secret_string = "{}"  # Fill manually after deployment
 }
 
-resource "aws_secretsmanager_secret" "slack_app_token" {
-  name                    = "sentinel/slack_app_token"
-  description             = "Slack App Token for SENTINEL"
+resource "aws_secretsmanager_secret" "google_chat_service_account_email" {
+  name                    = "sentinel/google_chat_service_account_email"
+  description             = "Google Chat service account email for SENTINEL"
   recovery_window_in_days = 7
 
   tags = {
-    Name        = "sentinel/slack_app_token"
+    Name        = "sentinel/google_chat_service_account_email"
     Environment = var.environment
   }
 }
 
-resource "aws_secretsmanager_secret_version" "slack_app_token" {
-  secret_id     = aws_secretsmanager_secret.slack_app_token.id
+resource "aws_secretsmanager_secret_version" "google_chat_service_account_email" {
+  secret_id     = aws_secretsmanager_secret.google_chat_service_account_email.id
   secret_string = "{}"
 }
 
-resource "aws_secretsmanager_secret" "slack_signing_secret" {
-  name                    = "sentinel/slack_signing_secret"
-  description             = "Slack Signing Secret for SENTINEL"
+resource "aws_secretsmanager_secret" "google_cloud_project_number" {
+  name                    = "sentinel/google_cloud_project_number"
+  description             = "Google Cloud project number for SENTINEL"
   recovery_window_in_days = 7
 
   tags = {
-    Name        = "sentinel/slack_signing_secret"
+    Name        = "sentinel/google_cloud_project_number"
     Environment = var.environment
   }
 }
 
-resource "aws_secretsmanager_secret_version" "slack_signing_secret" {
-  secret_id     = aws_secretsmanager_secret.slack_signing_secret.id
+resource "aws_secretsmanager_secret_version" "google_cloud_project_number" {
+  secret_id     = aws_secretsmanager_secret.google_cloud_project_number.id
   secret_string = "{}"
+}
+
+resource "aws_secretsmanager_secret" "sentinel_admin_space" {
+  name                    = "sentinel/sentinel_admin_space"
+  description             = "Google Chat admin space name for SENTINEL"
+  recovery_window_in_days = 7
+
+  tags = {
+    Name        = "sentinel/sentinel_admin_space"
+    Environment = var.environment
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "sentinel_admin_space" {
+  secret_id     = aws_secretsmanager_secret.sentinel_admin_space.id
+  secret_string = "{}"
+}
+
+# ── API Gateway HTTP API (Google Chat webhook) ────────────────────────────────
+
+resource "aws_apigatewayv2_api" "sentinel" {
+  name          = "sentinel-chat-webhook"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "sentinel" {
+  api_id             = aws_apigatewayv2_api.sentinel.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = "http://${aws_instance.sentinel.public_ip}:8080/{proxy}"
+  integration_method = "ANY"
+}
+
+resource "aws_apigatewayv2_route" "sentinel" {
+  api_id    = aws_apigatewayv2_api.sentinel.id
+  route_key = "ANY /{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.sentinel.id}"
+}
+
+resource "aws_apigatewayv2_stage" "sentinel" {
+  api_id      = aws_apigatewayv2_api.sentinel.id
+  name        = "$default"
+  auto_deploy = true
 }
 
 # ── CloudWatch ────────────────────────────────────────────────────────────────

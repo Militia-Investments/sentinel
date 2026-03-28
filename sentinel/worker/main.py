@@ -1,170 +1,126 @@
 import asyncio
 import structlog
-import structlog.stdlib
-
-from sentinel.config import (
-    POLL_INTERVAL_SECONDS,
-    RELEVANCE_THRESHOLD_LOW,
-    RELEVANCE_THRESHOLD_MEDIUM,
-    RELEVANCE_THRESHOLD_HIGH,
-    SENTINEL_ADMIN_CHANNEL,
-)
+import structlog
+import uvicorn
+from sentinel.config import POLL_INTERVAL_SECONDS, RELEVANCE_THRESHOLD_LOW, RELEVANCE_THRESHOLD_MEDIUM, RELEVANCE_THRESHOLD_HIGH, SENTINEL_ADMIN_SPACE
 from sentinel.db import get_all_active_ideas
 from sentinel.news.poller import poll_all_sources
 from sentinel.analysis.relevance import score_relevance
 from sentinel.analysis.impact import analyze_impact
 from sentinel.analysis.kelly import calculate_kelly
-from sentinel.slack.alerts import post_alert
-from sentinel.slack.bot import app, handler
+from sentinel.gchat.alerts import post_alert
+from sentinel.gchat.client import chat
 from sentinel.models import NewsSensitivity
+import asyncio
 
-# Configure structlog with JSON renderer for CloudWatch
+log = structlog.get_logger()
+
+# Configure structlog for CloudWatch JSON output
 structlog.configure(
     processors=[
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
         structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
+    ]
 )
-
-log = structlog.get_logger()
 
 
 def get_threshold(sensitivity: NewsSensitivity) -> int:
-    """Return the relevance score threshold for the given sensitivity level."""
-    if sensitivity == NewsSensitivity.HIGH:
-        return RELEVANCE_THRESHOLD_HIGH
-    elif sensitivity == NewsSensitivity.MEDIUM:
-        return RELEVANCE_THRESHOLD_MEDIUM
-    else:
-        return RELEVANCE_THRESHOLD_LOW
+    return {
+        NewsSensitivity.LOW: RELEVANCE_THRESHOLD_LOW,
+        NewsSensitivity.MEDIUM: RELEVANCE_THRESHOLD_MEDIUM,
+        NewsSensitivity.HIGH: RELEVANCE_THRESHOLD_HIGH,
+    }[sensitivity]
 
 
-async def news_poll_loop() -> None:
-    """Main polling loop: fetch news, score relevance, analyze impact, post alerts."""
-    log.info("sentinel.poll_loop.starting", interval_seconds=POLL_INTERVAL_SECONDS)
+async def _post_admin_message(text: str) -> None:
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: chat.spaces().messages().create(
+                parent=SENTINEL_ADMIN_SPACE,
+                body={"text": text}
+            ).execute()
+        )
+    except Exception:
+        pass
 
+
+async def news_poll_loop():
     while True:
         try:
-            log.info("sentinel.poll_loop.heartbeat")
-
-            # Fetch all active ideas
+            log.info("sentinel.poll.start")
             ideas = await get_all_active_ideas()
+
             if not ideas:
-                log.info("sentinel.poll_loop.no_active_ideas")
+                log.info("sentinel.poll.no_active_ideas")
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-            log.info("sentinel.poll_loop.ideas_loaded", count=len(ideas))
+            article_idea_pairs = await poll_all_sources(ideas)
+            log.info("sentinel.poll.fetched", article_count=len(article_idea_pairs))
 
-            # Poll all news sources
-            new_pairs = await poll_all_sources(ideas)
-            log.info("sentinel.poll_loop.articles_fetched", count=len(new_pairs))
-
-            if not new_pairs:
+            if not article_idea_pairs:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-            # Score relevance for all (article, idea) pairs concurrently
-            relevance_tasks = [score_relevance(article, idea) for article, idea in new_pairs]
-            relevance_scores = await asyncio.gather(*relevance_tasks, return_exceptions=True)
+            # Relevance filter — up to 10 concurrent Haiku calls
+            semaphore = asyncio.Semaphore(10)
+            async def score_with_sem(article, idea):
+                async with semaphore:
+                    return await score_relevance(article, idea)
 
-            # Filter by threshold and process sequentially for impact analysis
-            for i, score_result in enumerate(relevance_scores):
-                if isinstance(score_result, Exception):
-                    log.warning("sentinel.relevance.error", error=str(score_result))
-                    continue
+            relevance_scores = await asyncio.gather(*[
+                score_with_sem(article, idea)
+                for article, idea in article_idea_pairs
+            ])
 
-                article, idea = new_pairs[i]
-                threshold = get_threshold(idea.news_sensitivity)
+            to_analyze = [
+                (article, idea)
+                for (article, idea), score in zip(article_idea_pairs, relevance_scores)
+                if score.score >= get_threshold(idea.news_sensitivity)
+            ]
 
-                if score_result.score < threshold:
-                    log.debug(
-                        "sentinel.relevance.below_threshold",
-                        score=score_result.score,
-                        threshold=threshold,
-                        article_id=article.article_id,
-                        idea_id=idea.idea_id,
-                    )
-                    continue
+            log.info("sentinel.poll.to_analyze", count=len(to_analyze))
 
-                log.info(
-                    "sentinel.relevance.above_threshold",
-                    score=score_result.score,
-                    threshold=threshold,
-                    article_id=article.article_id,
-                    idea_id=idea.idea_id,
-                )
-
-                # Analyze impact
-                analysis = await analyze_impact(article, idea)
-                if analysis is None:
-                    log.warning(
-                        "sentinel.impact.failed",
-                        article_id=article.article_id,
-                        idea_id=idea.idea_id,
-                    )
-                    continue
-
-                # Calculate Kelly sizing
-                kelly = calculate_kelly(analysis, idea)
-
-                # Post alert to Slack
+            # Impact analysis — sequential to control Sonnet spend
+            for article, idea in to_analyze:
                 try:
-                    alert = await post_alert(app, idea, article, analysis, kelly)
-                    log.info(
-                        "sentinel.alert.posted",
-                        alert_id=alert.alert_id,
-                        idea_id=idea.idea_id,
-                        urgency=analysis.urgency.value,
-                        direction=analysis.direction.value,
-                    )
-                except Exception as exc:
-                    log.error(
-                        "sentinel.alert.post_failed",
-                        error=str(exc),
-                        article_id=article.article_id,
-                        idea_id=idea.idea_id,
-                    )
-                    # Notify admin channel
-                    try:
-                        await app.client.chat_postMessage(
-                            channel=SENTINEL_ADMIN_CHANNEL,
-                            text=f":x: Failed to post alert for idea `{idea.idea_id}`: {exc}",
-                        )
-                    except Exception:
-                        pass
+                    analysis = await analyze_impact(article, idea)
+                    if analysis is None:
+                        continue
+                    kelly = calculate_kelly(analysis, idea)
+                    await post_alert(idea, article, analysis, kelly)
+                    log.info("sentinel.alert.posted", idea_id=idea.idea_id, article_id=article.article_id)
+                except Exception as e:
+                    log.error("sentinel.alert.failed", idea_id=idea.idea_id, error=str(e))
+                    await _post_admin_message(f"⚠️ Alert failed for idea `{idea.idea_id[:8]}`: {e}")
 
-        except Exception as exc:
-            log.error("sentinel.poll_loop.exception", error=str(exc), exc_info=True)
-            # Notify admin channel
-            try:
-                await app.client.chat_postMessage(
-                    channel=SENTINEL_ADMIN_CHANNEL,
-                    text=f":x: SENTINEL poll loop exception: {exc}",
-                )
-            except Exception:
-                pass
+            log.info("sentinel.poll.heartbeat", ideas=len(ideas), analyzed=len(to_analyze))
+
+        except Exception as e:
+            log.error("sentinel.poll.loop_error", error=str(e))
+            await _post_admin_message(f"🔴 Poll loop error: {e}")
 
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
-async def slack_loop() -> None:
-    """Start the Slack Socket Mode handler."""
-    log.info("sentinel.slack_loop.starting")
-    await handler.start_async()
+async def web_server_loop():
+    """Run FastAPI/uvicorn as an async task."""
+    from sentinel.gchat.bot import app as fastapi_app
+    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8080, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
-async def main() -> None:
-    """Entry point: run both loops concurrently."""
+async def main():
     log.info("sentinel.starting")
-    await asyncio.gather(news_poll_loop(), slack_loop())
+    await asyncio.gather(
+        news_poll_loop(),
+        web_server_loop(),
+    )
 
 
 if __name__ == "__main__":

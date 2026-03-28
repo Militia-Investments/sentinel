@@ -21,3 +21,8 @@ output "ecr_repository_url" {
   description = "URL of the ECR repository for the SENTINEL Docker image"
   value       = aws_ecr_repository.sentinel.repository_url
 }
+
+output "google_chat_webhook_url" {
+  description = "HTTPS URL to configure in Google Chat App settings"
+  value       = "${aws_apigatewayv2_stage.sentinel.invoke_url}/chat/events"
+}
